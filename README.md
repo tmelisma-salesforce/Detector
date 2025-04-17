@@ -1,6 +1,6 @@
 # Detector
 
-A simple iOS SwiftUI object detection app using the Vision framework (iOS 18+) and a YOLOv8l Core ML model (with embedded NMS) to identify objects in user-selected photos and display bounding boxes with labels.
+A simple iOS SwiftUI object detection app using the Vision framework (iOS 18+) and a YOLOv11x Core ML model (with embedded NMS) to identify objects in user-selected photos and display bounding boxes with labels.
 
 ## Prerequisites
 
@@ -13,9 +13,9 @@ A simple iOS SwiftUI object detection app using the Vision framework (iOS 18+) a
 
 ### 1. Obtain and Convert Model
 
-The app requires a Core ML model file (`yolov8l.mlpackage`) which you need to generate from the original PyTorch model.
+The app requires a Core ML model file (`yolo11x.mlpackage`) which you need to generate from the original PyTorch model.
 
-1.  **Download Model:** Download the `yolov8l.pt` weights file from the official Ultralytics repository/website (e.g., check releases at [https://github.com/ultralytics/ultralytics](https://github.com/ultralytics/ultralytics)).
+1.  **Download Model:** Download the `yolo11x.pt` weights file from the official Ultralytics repository/website (e.g., check models linked from [https://github.com/ultralytics/ultralytics](https://github.com/ultralytics/ultralytics)).
 2.  **Create Environment:** Create and activate a Python virtual environment:
     ```bash
     python3 -m venv .venv
@@ -25,12 +25,13 @@ The app requires a Core ML model file (`yolov8l.mlpackage`) which you need to ge
     ```bash
     pip install ultralytics
     ```
-4.  **Export Model:** Navigate to the directory containing the downloaded `yolov8l.pt` file and run the export command:
+4.  **Export Model:** Navigate to the directory containing the downloaded `yolo11x.pt` file and run the export command:
     ```bash
-    yolo export model=yolov8l.pt format=coreml nms=true
+    # Ensure you use the correct model weights filename
+    yolo export model=yolo11x.pt format=coreml nms=true
     ```
-    This will generate a `yolov8l.mlpackage` directory.
-5.  **Add to Xcode:** Drag the entire `yolov8l.mlpackage` directory into your Xcode project navigator. Ensure it is added to the "Detector" app target when prompted (check Target Membership in the File Inspector).
+    This will generate a `yolo11x.mlpackage` directory.
+5.  **Add to Xcode:** Drag the entire `yolo11x.mlpackage` directory into your Xcode project navigator. Ensure it is added to the "Detector" app target when prompted (check Target Membership in the File Inspector).
 
 ### 2. Build and Run App
 
