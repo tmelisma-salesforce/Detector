@@ -9,6 +9,7 @@ import Vision // Using iOS 18 APIs where applicable, result types might bridge f
 import CoreML
 import UIKit // For UIImage, CGRect, CGImagePropertyOrientation
 import SwiftUI // For ObservableObject
+import ImageIO // For CGImagePropertyOrientation
 
 // Make ObjectDetector an ObservableObject to use with @StateObject in ContentView
 class ObjectDetector: ObservableObject {
@@ -16,10 +17,13 @@ class ObjectDetector: ObservableObject {
     private var visionModelContainer: Vision.CoreMLModelContainer?
 
     // Model parameters
-    private let modelName = "yolov8l" // Ensure this matches the .mlpackage name (nms=True version)
+    private let modelName = "yolo11x" // Ensure this matches the .mlpackage name
+
+    // Output feature names from the nms=True model
+    private let coordinatesOutputName = "coordinates"
+    private let confidenceOutputName = "confidence"
 
     // Class names mapping (ensure this matches your model training)
-    // Make it static so it can be accessed from Detection struct and other parts of the app easily
     static let classNames: [Int: String] = [
         0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane",
         5: "bus", 6: "train", 7: "truck", 8: "boat", 9: "traffic light",
@@ -48,7 +52,7 @@ class ObjectDetector: ObservableObject {
     private func loadModel() {
         print("[DEBUG ObjectDetector] Loading model '\(modelName)' (nms=True version)...")
         guard let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") else {
-            let errorMsg = "Model file '\(modelName).mlmodelc' not found. Ensure '\(modelName).mlmodel' (nms=True version) is added to the project target."
+            let errorMsg = "Model file '\(modelName).mlmodelc' not found. Ensure '\(modelName).mlpackage' (nms=True version) is added to the project target."
             print("[ERROR ObjectDetector] \(errorMsg)")
             DispatchQueue.main.async { self.setupError = errorMsg }
             return
@@ -67,10 +71,27 @@ class ObjectDetector: ObservableObject {
         }
     }
 
+    // MARK: - Orientation Helper
+
+    /// Converts UIImage.Orientation to CGImagePropertyOrientation used by Vision.
+    private func cgImageOrientation(from imageOrientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch imageOrientation {
+            case .up: return .up
+            case .down: return .down
+            case .left: return .left
+            case .right: return .right
+            case .upMirrored: return .upMirrored
+            case .downMirrored: return .downMirrored
+            case .leftMirrored: return .leftMirrored
+            case .rightMirrored: return .rightMirrored
+            @unknown default: return .up // Default to up if unknown
+        }
+    }
+
     // MARK: - Detection Execution (Revised for nms=True model & RecognizedObjectObservation)
 
     func performDetection(on uiImage: UIImage) async throws -> [Detection] {
-        print("[DEBUG ObjectDetector] Starting performDetection (nms=True model)...")
+        print("[DEBUG ObjectDetector] Starting performDetection (Model: \(modelName))...")
         guard let container = visionModelContainer else {
             print("[ERROR ObjectDetector] Model container not loaded.")
             throw DetectionError.modelNotLoaded
@@ -80,15 +101,22 @@ class ObjectDetector: ObservableObject {
             throw DetectionError.cgImageCreationFailed
         }
 
+        // *** Get Correct Orientation ***
+        let imageOrientation = uiImage.imageOrientation
+        let visionOrientation = cgImageOrientation(from: imageOrientation)
+        print("[DEBUG ObjectDetector] Image Orientation: \(imageOrientation.rawValue), Vision Orientation: \(visionOrientation.rawValue)")
+
+
         // 1. Create Vision Request
         print("[DEBUG ObjectDetector] Creating Vision.CoreMLRequest...")
         let request = Vision.CoreMLRequest(model: container)
 
-        // 2. Perform Request
-        print("[DEBUG ObjectDetector] Performing request on CGImage (orientation: up)...")
+        // 2. Perform Request with Correct Orientation
+        print("[DEBUG ObjectDetector] Performing request on CGImage (orientation: \(visionOrientation.rawValue))...")
         let observations: [any VisionObservation]
         do {
-             observations = try await request.perform(on: cgImage, orientation: CGImagePropertyOrientation.up)
+             // *** Pass Correct Orientation ***
+             observations = try await request.perform(on: cgImage, orientation: visionOrientation)
              print("[DEBUG ObjectDetector] Vision request performed. Received \(observations.count) observations.")
         } catch {
              print("[ERROR ObjectDetector] Vision request failed: \(error)")
@@ -97,15 +125,12 @@ class ObjectDetector: ObservableObject {
 
         // 3. Process Observations (Cast to RecognizedObjectObservation)
         print("[DEBUG ObjectDetector] Processing observations (expecting RecognizedObjectObservation)...")
-        // Try casting directly to the most likely structured type
         let recognizedObservations = observations.compactMap { $0 as? Vision.RecognizedObjectObservation }
         print("[DEBUG ObjectDetector] Found \(recognizedObservations.count) RecognizedObjectObservation(s).")
 
-        // Check if casting failed, maybe log types if it did
         if recognizedObservations.isEmpty && !observations.isEmpty {
              print("[WARN ObjectDetector] Casting to RecognizedObjectObservation failed. Actual observation types:")
              for (index, obs) in observations.enumerated() { print("  Observation \(index): \(type(of: obs))") }
-             // Throw error or return empty depending on desired behavior
              throw DetectionError.unexpectedResultType
         }
 
@@ -114,31 +139,26 @@ class ObjectDetector: ObservableObject {
         print("[DEBUG ObjectDetector] Converting \(recognizedObservations.count) RecognizedObjectObservation(s) to [Detection]...")
 
         for observation in recognizedObservations {
-            // Get the top classification label
             guard let topLabel = observation.labels.first else {
                 print("[WARN ObjectDetector] Skipping observation \(observation.uuid) because it has no labels.")
                 continue
             }
 
-            // Extract confidence (this is the confidence for the top label)
             let confidence = topLabel.confidence
-
-            // Extract label name identifier
             let labelName = topLabel.identifier
-            print("[DETAILED LOG Convert] Trying to find index for label name: '\(labelName)'")
+            // print("[DETAILED LOG Convert] Trying to find index for label name: '\(labelName)'")
 
-            // Find the corresponding class index (Int) by looking up the label name (String) in our dictionary
             guard let classIndex = ObjectDetector.classNames.first(where: { $1 == labelName })?.key else {
                  print("[WARN ObjectDetector] Skipping observation \(observation.uuid) because label name '\(labelName)' was not found in classNames dictionary.")
                  continue
             }
-             print("[DETAILED LOG Convert] Found Class Index: \(classIndex) for label name: '\(labelName)'")
+            // print("[DETAILED LOG Convert] Found Class Index: \(classIndex) for label name: '\(labelName)'")
 
+            // Bounding box from Vision (NormalizedRect, bottom-left origin)
+            // Vision coordinates are relative to the image *as it was processed* (using the orientation we provided)
+            let visionRect = observation.boundingBox
 
-            // Extract bounding box (NormalizedRect, bottom-left origin)
-            let visionRect = observation.boundingBox // This is NormalizedRect
-
-            // Convert to CGRect with normalized coordinates and top-left origin
+            // Convert to CGRect with normalized coordinates and top-left origin for SwiftUI
             let normalizedBox = CGRect(
                 x: visionRect.origin.x,
                 y: 1.0 - visionRect.origin.y - visionRect.height, // Convert Y origin
@@ -146,7 +166,7 @@ class ObjectDetector: ObservableObject {
                 height: visionRect.height
             )
 
-            // Clamp normalized coordinates to [0, 1] to ensure validity
+             // Clamp normalized coordinates to [0, 1] to ensure validity
              let clampedBox = CGRect(
                  x: max(0.0, min(1.0, normalizedBox.origin.x)),
                  y: max(0.0, min(1.0, normalizedBox.origin.y)),
@@ -154,15 +174,12 @@ class ObjectDetector: ObservableObject {
                  height: max(0.0, min(1.0 - normalizedBox.origin.y, normalizedBox.height))
              )
 
-
-            // Add detection if box is valid
             if clampedBox.width > 0 && clampedBox.height > 0 {
                 let detection = Detection(box: clampedBox, classIndex: classIndex, confidence: confidence)
                 finalDetections.append(detection)
-                // Log first few converted detections
-                if finalDetections.count <= 15 {
+                if finalDetections.count <= 10 { // Log first few final detections
                     print("[DETAILED LOG Convert] Converted Detection \(finalDetections.count): Box=\(detection.box), Class=\(detection.classIndex) (\(detection.label ?? "??")), Conf=\(String(format: "%.3f", detection.confidence))")
-                    print("    (Source: UUID=\(observation.uuid), VisionRect=\(visionRect), TopLabelID='\(topLabel.identifier)', TopLabelConf=\(topLabel.confidence))")
+                    // print("    (Source: UUID=\(observation.uuid), VisionRect=\(visionRect), TopLabelID='\(topLabel.identifier)', TopLabelConf=\(topLabel.confidence))")
                 }
             } else {
                  print("[WARN ObjectDetector Convert] Skipping observation \(observation.uuid) (Label: '\(labelName)') due to zero size box after conversion/clamping: \(clampedBox)")
@@ -172,7 +189,5 @@ class ObjectDetector: ObservableObject {
         print("[DEBUG ObjectDetector] Finished conversion. Produced \(finalDetections.count) final detections.")
         return finalDetections
     }
-
-    // No NMS or complex parsing needed here anymore!
 }
 

@@ -86,7 +86,8 @@ struct ContentView: View {
                 .padding(.bottom)
                 .disabled(isProcessing) // Disable while processing
             }
-            .navigationTitle("YOLOv8 Object Detection")
+             // *** UPDATED TITLE ***
+            .navigationTitle("YOLOv11x Object Detection")
             .navigationBarTitleDisplayMode(.inline)
             // Trigger processing when a new photo item is selected
             .onChange(of: selectedPhotoItem) { _, newItem in
@@ -143,7 +144,7 @@ struct ContentView: View {
             print("[DEBUG ContentView] Starting object detection task...")
             let detections = try await objectDetector.performDetection(on: imageToProcess)
             let detectionEndTime = Date()
-            print("[DEBUG ContentView] Object detection task finished in \(detectionEndTime.timeIntervalSince(startTime).formatted(.number.precision(.fractionLength(3))))s. Found \(detections.count) final detections after NMS.")
+            print("[DEBUG ContentView] Object detection task finished in \(detectionEndTime.timeIntervalSince(startTime).formatted(.number.precision(.fractionLength(3))))s. Found \(detections.count) final detections.")
 
 
             // Update state with results on main thread
